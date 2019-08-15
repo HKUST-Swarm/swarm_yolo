@@ -1,8 +1,10 @@
 <launch>
+	<arg name="debug_show" default="false" />
 	<node pkg="yolov3_ros" name="yolov3_ros" type="detect.py" output="screen">
 		<param name="image_topic" type="string" value="/camera/infra1/image_rect_raw" />
 		<param name="model_def" type="string" value="config/yolov3-tiny-1class.cfg" />
 		<param name="weights_path" type="string" value="weights/yolov3-tiny_drone.pth" />
 		<param name="class_path" type="string" value="config/drone.names" />
+		<param name="debug_show" type="bool" value="$(arg debug_show)" />
 	</node>
 </launch>
