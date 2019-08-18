@@ -74,11 +74,12 @@ class SwarmDetector:
         self.nms_thres = nms_thres
         self.history_bbox = []
         self.all_ids = set()
-        self.MAX_XY_MATCHERR = 0.2
+        self.MAX_XY_MATCHERR = 0.3
         self.MAX_Z_MATCHERR = 0.4
         self.MAX_DRONE_ID = 10
 
         self.detected_poses_pub = {}
+        self.sw_detected_pub = rospy.Publisher("/swarm_detection/swarm_detected", swarm_detected, queue_size=1)
 
         self.count = 0
 
@@ -88,6 +89,8 @@ class SwarmDetector:
         self.quat = np.array([0, 0, 0, 1])
 
         self.device = device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.camera_pos = np.array([0.044, -0.035, 0.0])
 
         # # Set up model
         self.model = model = Darknet(model_def, img_size=img_size).to(device)
@@ -197,13 +200,17 @@ class SwarmDetector:
     def predict_3dpose(self, cx, cy, d):
         tarpos_cam = np.array(XYZ_from_cxy_d(cx, cy, d, self.intrinsic)) #target position in camera frame
         r2 = quaternion_matrix(self.quat)[0:3,0:3]
-        r2cam = np.dot(r2, R_cam_on_drone)
-        dposyolo_global = np.dot(r2cam, tarpos_cam) + self.pos
-        return dposyolo_global
+        
+        dpos_body_frame = np.dot(R_cam_on_drone, tarpos_cam) + self.camera_pos
+        dposyolo_global = np.dot(r2, dpos_body_frame)
+        
+        pos_global = dposyolo_global + self.pos
+        
+        return pos_global, dpos_body_frame
     
     def pub_detection(self, _id, pos, stamp):
         if not(_id in self.detected_poses_pub):
-            self.detected_poses_pub[_id] = rospy.Publisher("/swarm_detection/detected_pose", PoseStamped, queue_size=1)
+            self.detected_poses_pub[_id] = rospy.Publisher("/swarm_detection/detected_pose_{}".format(_id), PoseStamped, queue_size=1)
         
         pose = PoseStamped()
         pose.header.frame_id = "world"
@@ -215,6 +222,28 @@ class SwarmDetector:
 
         self.detected_poses_pub[_id].publish(pose)
 
+    def publish_alldetected(self, detected_objects, stamp):
+        sw_detected = swarm_detected()
+        sw_detected.header.stamp = stamp
+        sw_detected.self_drone_id = -1
+        for _id, dpos in detected_objects:
+            nd = node_detected()
+            nd.header.stamp = stamp
+            nd.self_drone_id = -1
+            nd.remote_drone_id = _id
+            nd.is_2d_detect = False
+            nd.is_yaw_valid = False
+            nd.relpose.pose.position.x = dpos[0]
+            nd.relpose.pose.position.y = dpos[1]
+            nd.relpose.pose.position.z = dpos[2]
+            nd.relpose.covariance[0] = 0.1*0.1
+            nd.relpose.covariance[6+1] = 0.07*0.07
+            nd.relpose.covariance[2*6+2] = 0.07*0.07
+
+            sw_detected.detected_nodes.append(nd)
+
+        self.sw_detected_pub.publish(sw_detected)
+        
     def img_callback(self, img, depth_img):
         # print("GRAY", img.header.stamp)
         self.count += 1
@@ -246,6 +275,7 @@ class SwarmDetector:
         rospy.loginfo_throttle(1.0, "Detection use time {:f}ms".format((rospy.get_time() - ts)*1000))
         bboxes = []
         bboxes_unit = []
+        detected_objects = []
         if type(detections[0])==torch.Tensor:
             data = detections[0].numpy()
             for i in range(len(data)):
@@ -283,11 +313,12 @@ class SwarmDetector:
   1, (0, 255, 255), 1, cv2.LINE_AA)
                         
                 if not bbox_wrong:
-                    tarpos = self.predict_3dpose(cx, cy, d)
+                    tarpos, dpos = self.predict_3dpose(cx, cy, d)
                     _id = self.bbox_tracking(stamp, cx, cy, w, h, tarpos)
 
                     if _id < self.MAX_DRONE_ID:
                         self.pub_detection(_id, tarpos, stamp)
+                        detected_objects.append((_id, dpos))
 
                     cv2.putText(img_gray, "ID {}".format(_id), pt1, cv2.FONT_HERSHEY_SIMPLEX,
   1, (230, 25, 155), 2, cv2.LINE_AA)
@@ -314,7 +345,7 @@ class SwarmDetector:
             cv2.imshow("YOLO", _img)
             cv2.waitKey(1)
             
-
+        self.publish_alldetected(detected_objects, stamp)
         
         
         return None
