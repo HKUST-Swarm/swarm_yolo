@@ -76,6 +76,44 @@ def draw_image(img, points, xmin, xmax, ymin, ymax):
     for point in points:
         cv2.circle(img, (int(point[0][0]), int(point[0][1])), 3, (0, 255, 0) , 1)
 
+def draw_to_cv_image_(_img, d0_pos, d0_quat, d2_pos, d2_quat, text):
+    width = 640
+    height = 320
+    d0_fix = np.array([0, 0, 0])
+    r = quaternion_matrix(d2_quat)[0:3,0:3]
+    R0 = quaternion_matrix(d0_quat)[0:3, 0:3]
+    rvec = np.transpose(np.dot(r, R_cam_on_drone))
+    tvec = -np.dot(rvec, d2_pos)
+    
+    corpoints = np.array([
+         d0_pos + np.dot(R0, np.array([0.145, 0.145, -0.02]) + d0_fix), #Center
+         d0_pos + np.dot(R0, np.array([0.145, 0.145, -0.02]) + d0_fix),
+         d0_pos + np.dot(R0, np.array([0.145, -0.145, -0.02]) + d0_fix),
+         d0_pos + np.dot(R0, np.array([-0.145, 0.145, -0.02]) + d0_fix),
+         d0_pos + np.dot(R0, np.array([-0.145, -0.145, -0.02]) + d0_fix),
+         d0_pos + np.dot(R0, np.array([0, 0, 0.13]) + d0_fix),
+     ])
+    
+
+
+    points, _ = cv2.projectPoints(corpoints, rvec, tvec, K_cam_gray, D_cam)
+    #_img = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+    xmin = int(np.min(points[:,:,0]))
+    xmax = int(np.max(points[:,:,0]))
+    ymin = int(np.min(points[:,:,1]))
+    ymax = int(np.max(points[:,:,1]))
+    
+    draw_image(_img, points, xmin, xmax, ymin, ymax)
+    cv2.putText(_img, text, (xmin, ymin), cv2.FONT_HERSHEY_SIMPLEX,
+  1, (0, 0, 155), 3, cv2.LINE_AA)
+    c_x = (xmin + xmax)/(2*width)
+    c_y = (ymin + ymax)/(2*height)
+    
+    w = (xmax - xmin)/(width)
+    h = (ymax - ymin)/(height)
+    return c_x, c_y, w, h, _img
+
+    
 def project_to_cv_image(img_msg, dp2, dp0, d0_fix, display = "cv", img_to_draw = None):
     bridge = CvBridge()
     cv_image = bridge.imgmsg_to_cv2(img_msg, "mono8")
