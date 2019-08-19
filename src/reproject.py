@@ -240,7 +240,7 @@ def reprojectBoundBox(cx, cy, d, intrinsic):
 
     return int(xmin), int(ymin), int(xmax), int(ymax)
 
-def estmate_distance(depth, c_x, c_y, intrinsic, avr_range = 5):
+def estimate_distance(depth, c_x, c_y, intrinsic, avr_range = 5):
     width = 640.0
     height = 480.0
     c_x = int(c_x*width)

@@ -163,6 +163,7 @@ class SwarmDetector:
         return None
 
     def bbox_tracking(self, ts, cx, cy, w, h, est_pos):
+        # TODO: When multiple in sphere, we need choose the nearest one
         #print(est_pos)
         bbox = BBox(cx, cy, w, h, -1)
 
@@ -292,7 +293,7 @@ class SwarmDetector:
                 w = (x2 - x1)/img_size
                 h = (y2 - y1)/img_size
                 
-                d = estmate_distance(depth, cx, cy, self.intrinsic)
+                d = estimate_distance(depth, cx, cy, self.intrinsic)
                 
                 xremin, yremin, xremax, yremax = reprojectBoundBox(cx, cy, d, self.intrinsic)
                 
