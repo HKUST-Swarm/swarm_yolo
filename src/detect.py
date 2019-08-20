@@ -132,31 +132,46 @@ class SwarmDetector:
             "cy":234.29
         }
 
-        self.trackers = {}
+        self.multi_trackers = {}
         self.debug_tracker = None
         self.last_gray = None
+        self.trackers_bboxs = {}
+        self.WIDTH = 640.0
+        self.HEIGHT = 480.0
     
     def start_tracker_tracking(self, _id, frame, bbox):
-         #self.debug_tracker = cv2.TrackerCSRT_create()
-         #self.debug_tracker = cv2.TrackerKCF_create()
-         #self.debug_tracker = cv2.TrackerMIL_create()
-         self.debug_tracker = cv2.TrackerMOSSE_create()
+        if _id in self.multi_trackers:
+            del self.multi_trackers[_id]
+        
+        _tracker = cv2.TrackerMOSSE_create()   
+        #_tracker = cv2.TrackerKCF_create()    
+        #_tracker = cv2.TrackerCSRT_create()    
+        
+        #print("INIT tracker", bbox.toCVBOX())
+        _tracker.init(frame, bbox.toCVBOX())
+        self.multi_trackers[_id] = _tracker
+        
             
-         print("INIT tracker", bbox.toCVBOX())
-         self.debug_tracker.init(frame, bbox.toCVBOX())
 
     def tracker_draw_tracking(self, frame, frame_color):
-        (success, box) = self.debug_tracker.update(frame)
-        if success:
-            (x, y, w, h) = [int(v) for v in box]
-            if self.debug_show != "":
-                cv2.rectangle(frame_color, (x, y), (x+w, y+h), (0, 100, 100), 2)
-                cv2.putText(frame_color, "TRACKER", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 100, 100), 2, cv2.LINE_AA)
-        else:
-            print("Track failed")
-            self.debug_tracker = None
-
-        
+        self.trackers_bboxs = {}
+        ids_need_to_delete = []
+        for _id in self.multi_trackers:
+            _tracker = self.multi_trackers[_id]
+            (success, box) = _tracker.update(frame)
+            if success:
+                (x, y, w, h) = [int(v) for v in box]
+                self.trackers_bboxs[_id] = BBox((x+w/2.0)/self.WIDTH, (y+h/2.0)/self.HEIGHT, 
+                                                w/ self.WIDTH, h/self.HEIGHT, _id)
+                if self.debug_show != "":
+                    cv2.rectangle(frame_color, (x, y), (x+w, y+h), (0, 100, 100), 2)
+                    cv2.putText(frame_color, "TRACKER {}".format(_id), (x, y+h), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 200, 200), 2, cv2.LINE_AA)
+            else:
+                print("TRACKER {} failed".format(_id))
+                ids_need_to_delete.append(_id)
+        for _id in ids_need_to_delete:
+            del self.multi_trackers[_id]
+            
     def add_bbox(self, ts, bbox):
         if len(self.history_bbox) == 0 or self.history_bbox[-1]["ts"] != ts:
             #print("Add new bbox ts", ts, bbox)
@@ -188,51 +203,69 @@ class SwarmDetector:
             draw_to_cv_image_(_img, target_pos, target_quat, self.pos, self.quat, "EST {}".format(_id))
     
     def match_pos(self, est_pos):
+        _match_id = None
+        _match_err_norm = 0
         for _id in self.estimate_node_poses:
             pose = self.estimate_node_poses[_id]
             target_pos = pose[0:3]
             err = est_pos - target_pos
-            if np.abs(err[0]) < self.MAX_XY_MATCHERR and np.abs(err[1]) < self.MAX_XY_MATCHERR and np.abs(err[2]) < self.MAX_Z_MATCHERR:
+            err_norm = np.linalg.norm(_err)
+            if np.abs(err[0]) < self.MAX_XY_MATCHERR and np.abs(err[1]) < self.MAX_XY_MATCHERR and np.abs(err[2]) < self.MAX_Z_MATCHERR and err_norm < _match_err_norm:
+                _match_id = _id
+                _match_err_norm = err_norm
+                
+        return _match_id
+    
+    def estimate_bbox_id(self, bbox):
+        for _id in self.trackers_bboxs:
+            _tracked_bbox = self.trackers_bboxs[_id]
+            if _tracked_bbox.overlap(bbox) > 0.6:
                 return _id
-        return None
-
+        #return None
+        if len(self.history_bbox) > 0:
+            min_index = len(self.history_bbox) - self.BBOX_TRACKS_FRAME
+            if min_index < 0:
+                min_index = 0
+            best_overlap =  self.TRACK_OVERLAP_THRES 
+            best_id = None
+            for k in range(len(self.history_bbox)-1, min_index, -1):
+                for _old_bbox in self.history_bbox[k]["bboxes"]:
+                    #print("Overlap", _old_bbox.overlap(bbox))
+                    if _old_bbox.overlap(bbox) > best_overlap:
+                        best_id =  _old_bbox.id
+                        best_overlap = _old_bbox.overlap(bbox)
+                if best_id is not None:
+                    return best_id
+            return best_id
+                    
+    def remove_tracker(self, _id):
+        if _id in self.multi_trackers:
+            del self.multi_trackers[_id]
+        
     def bbox_tracking(self, ts, cx, cy, w, h, est_pos, frame, frame_gray):
         # TODO: When multiple in sphere, we need choose the nearest one
         #print(est_pos)
         bbox = BBox(cx, cy, w, h, -1)
 
         #if self.debug_tracker is None:
-        self.start_tracker_tracking(0, frame_gray, bbox)
-
         _match_id = self.match_pos(est_pos)
-
-        if len(self.history_bbox) > 0:
-            min_index = len(self.history_bbox) - self.BBOX_TRACKS_FRAME
-            if min_index < 0:
-                min_index = 0
-            for k in range(len(self.history_bbox)-1, min_index, -1):
-                for _old_bbox in self.history_bbox[k]["bboxes"]:
-                    #print("Overlap", _old_bbox.overlap(bbox))
-                    if _old_bbox.overlap(bbox) > self.TRACK_OVERLAP_THRES:
-                        #print("Track bounding box!")
-                        if _old_bbox.id != _match_id:
-                            if bbox.id > self.MAX_DRONE_ID:
-                                bbox.id = _match_id #old bbox and this all should be matchid
-                            else:
-                                # We will accept old matched id
-                                bbox.id = _old_bbox.id
-                        else:
-                            bbox.id = _old_bbox.id
-
-                        self.add_bbox(ts, bbox)
-                        return bbox.id  
+        _id = self.estimate_bbox_id(bbox)
         
-        if _match_id is None:
-            _id = random.randint(100,10000)
+        if _id is None:
+            _id = random.randint(100, 1000)
         else:
+            self.remove_tracker(_id)
+        #Start new track; fix the bounding box
+            
+        if _id > self.MAX_DRONE_ID and _match_id is not None:
             _id = _match_id
+        
         bbox.id = _id
+        
+        self.start_tracker_tracking(_id, frame_gray, bbox)
+            
         self.add_bbox(ts, bbox)
+        
         return _id
     
     def predict_3dpose(self, cx, cy, d):
@@ -328,7 +361,7 @@ class SwarmDetector:
         elif self.debug_show == "cv":
             _img = cv2.resize(img_gray, (1280, 960))
             cv2.imshow("YOLO", _img)
-            cv2.waitKey(2)
+            cv2.waitKey(-1)
             
     def img_callback(self, img, depth_img):
         img_size = self.img_size
@@ -338,13 +371,10 @@ class SwarmDetector:
         img_ = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
         # print("GRAY", img.header.stamp)
         self.count += 1
+        self.tracker_draw_tracking(img_gray, img_)
+        
         if self.count % 3 != 1:
-            if self.debug_tracker is not None:
-                self.tracker_draw_tracking(img_gray, img_)
-                rospy.loginfo(" Tracker total use time {:f}ms".format((rospy.get_time() - ts)*1000))
-                self.show_debug_img(img_)
-                
-            return
+            return img_
 
         
         depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
@@ -355,8 +385,6 @@ class SwarmDetector:
         bboxes_unit = []
         detected_objects = []
         data = self.detect_by_yolo(img_)
-        if self.debug_tracker is not None:
-            self.tracker_draw_tracking(img_gray, img_)
 
         for i in range(len(data)):
             x1, y1, x2, y2, conf, cls_conf, cls_pred = data[i,0:7]
@@ -398,12 +426,9 @@ class SwarmDetector:
             
                 
         rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
-        self.show_debug_img(img_)
-            
+        #self.show_debug_img(img_)
         self.publish_alldetected(detected_objects, stamp)
-        
-        
-        return None
+        return img_
     
 class SwarmDetectorNode:
     def __init__(self):
