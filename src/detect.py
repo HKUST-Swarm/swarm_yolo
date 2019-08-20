@@ -38,6 +38,7 @@ global debug_show
 debug_show = False
 global count
 count = 0
+color = np.random.randint(0,255,(100,3))
 
 class BBox():
     def __init__(self, cx, cy, w, h, _id):
@@ -64,6 +65,14 @@ class BBox():
         SI = max(0, min(XA2, XB2) - max(XA1, XB1)) * max(0, min(YA2, YB2) - max(YA1, YB1))
         SU = SA + SB - SI
         return SI / min(SA, SB)
+    
+    def toCVBOX(self):
+        XA1 = self.cx - self.w/2
+        XA2 = self.cx + self.w/2
+        YA1 = self.cy - self.h/2
+        YA2 = self.cy + self.h/2
+        return int(XA1*640),int(YA1*480), int(self.w*640), int(self.h*480)
+
 
 class SwarmDetector:
     def __init__(self, img_size=416, conf_thres=0.9, nms_thres=0.1,debug_show="", weights_path="./weights/yolov3-tiny_drone.pth", model_def="config/yolov3-tiny-1class.cfg", class_path="config/drone.names"):
@@ -122,6 +131,59 @@ class SwarmDetector:
             "cx":319.95,
             "cy":234.29
         }
+
+        self.trackers = {}
+        self.debug_tracker = None
+        self.last_gray = None
+    
+    def start_tracker_tracking(self, _id, frame, bbox):
+        feature_params = dict( maxCorners = 100,
+                       qualityLevel = 0.3,
+                       minDistance = 2,
+                       blockSize = 7 )
+        self.last_gray = frame.copy()
+        self.debug_tracker = 1
+        x, y, w, h = bbox.toCVBOX()
+        self.p0 = []
+        for i in range(1, 10, 2):
+            for j in range(1, 10, 2):
+                self.p0.append([[
+                    float(x + i/10.0*w),
+                    float(y + j/10.0*h)
+                ]])
+        self.p0 = np.array(self.p0, dtype=np.float32)
+        # print(self.p0)
+        # self.debug_tracker = cv2.Tracker_create("KCF")
+        # print("INIT tracker", bbox.toCVBOX())
+        # self.debug_tracker.init(frame, bbox.toCVBOX())
+
+    def tracker_draw_tracking(self, frame, frame_color):
+        #(success, box) = self.debug_tracker.update(frame)
+        #if success:
+        #    (x, y, w, h) = [int(v) for v in box]
+        #    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 100, 100), 2)
+        #    cv2.putText(frame, "TRACKER", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 100, 100), 2, cv2.LINE_AA)
+        #else:
+        #    self.debug_tracker = None
+
+        p0 = self.p0
+        lk_params = dict( winSize  = (15,15),
+                  maxLevel = 2,
+                  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+        p1, st, err = cv2.calcOpticalFlowPyrLK(self.last_gray, frame, p0, None, **lk_params)
+
+
+        good_new = p1[st==1]
+        good_old = p0[st==1]
+
+        # draw the tracks
+        for i,(new,old) in enumerate(zip(good_new,good_old)):
+            a,b = new.ravel()
+            c,d = old.ravel()
+            cv2.line(frame_color, (a,b),(c,d), color[i].tolist(), 2)
+            cv2.circle(frame_color,(a,b),5,color[i].tolist(),-1)
+        self.p0 = good_new.reshape(-1,1,2)
+
         
     def add_bbox(self, ts, bbox):
         if len(self.history_bbox) == 0 or self.history_bbox[-1]["ts"] != ts:
@@ -162,10 +224,13 @@ class SwarmDetector:
                 return _id
         return None
 
-    def bbox_tracking(self, ts, cx, cy, w, h, est_pos):
+    def bbox_tracking(self, ts, cx, cy, w, h, est_pos, frame, frame_gray):
         # TODO: When multiple in sphere, we need choose the nearest one
         #print(est_pos)
         bbox = BBox(cx, cy, w, h, -1)
+
+        #if self.debug_tracker is None:
+        self.start_tracker_tracking(0, frame_gray, bbox)
 
         _match_id = self.match_pos(est_pos)
 
@@ -244,20 +309,9 @@ class SwarmDetector:
             sw_detected.detected_nodes.append(nd)
 
         self.sw_detected_pub.publish(sw_detected)
-        
-    def img_callback(self, img, depth_img):
-        # print("GRAY", img.header.stamp)
-        self.count += 1
-        if self.count % 3 != 1:
-            return
+    
+    def detect_by_yolo(self, img_gray):
         ts = rospy.get_time()
-        stamp = img.header.stamp
-        img_gray = self.bridge.imgmsg_to_cv2(img, "mono8")
-        img_gray = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
-        
-        depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
-        height, width = img_gray.shape[:2]
-
         loader = transforms.Compose([
             transforms.ToTensor(),
         ])
@@ -272,65 +326,23 @@ class SwarmDetector:
         with torch.no_grad():
             detections = self.model(image.unsqueeze(0))
             detections = non_max_suppression(detections, self.conf_thres, self.nms_thres)
-        
+            
         rospy.loginfo_throttle(1.0, "Detection use time {:f}ms".format((rospy.get_time() - ts)*1000))
-        bboxes = []
-        bboxes_unit = []
-        detected_objects = []
-        if type(detections[0])==torch.Tensor:
-            data = detections[0].numpy()
-            for i in range(len(data)):
-                x1, y1, x2, y2, conf, cls_conf, cls_pred = detections[0].numpy()[i,0:7]
-                if x2 - x1 < 0.03*img_size or  y2 - y1 < 0.02*img_size:
-                    continue
+        if detections[0] is not None:
+            return detections[0].numpy()
+        return []
 
-                pt1 = int(x1/img_size*width), int(y1/img_size*height)
-                pt2 = int(x2/img_size*width), int(y2/img_size*height)
-                
-                bbox_width = (x2 - x1)/img_size*width
-                cx = (x1+x2)/(img_size*2)
-                cy = (y1+y2)/(img_size*2)
-                w = (x2 - x1)/img_size
-                h = (y2 - y1)/img_size
-                
-                d = estimate_distance(depth, cx, cy, self.intrinsic)
-                
-                xremin, yremin, xremax, yremax = reprojectBoundBox(cx, cy, d, self.intrinsic)
-                
-                width_re = xremax - xremin
-                
-                bbox_rate = width_re / bbox_width
-                bbox_wrong = bbox_rate < 0.4 or bbox_rate > 1.6
-                
-              
-                if self.debug_show != "":
-                    if bbox_wrong:
+    def draw_bbox_debug_info(self, bbox_wrong, img_gray, pt1, pt2, bbox_rate, d, width_re):
+        if self.debug_show != "":
+            if bbox_wrong:
                         cv2.rectangle(img_gray, pt1, pt2, (0, 0, 255), 2)
                         cv2.putText(img_gray, "WRONG BBOX RATE {:2.1f} D {:4.3f} RE width{}".format(bbox_rate, d, width_re), (10, 40), cv2.FONT_HERSHEY_SIMPLEX,
-  0.5, (0, 255, 255), 1, cv2.LINE_AA)
-                    else:
-                        cv2.rectangle(img_gray, pt1, pt2, (0, 255, 0), 2)
-                        cv2.putText(img_gray, "RIGHT BBOX", (10, 40), cv2.FONT_HERSHEY_SIMPLEX,
-  1, (0, 255, 255), 1, cv2.LINE_AA)
-                        
-                if not bbox_wrong:
-                    tarpos, dpos = self.predict_3dpose(cx, cy, d)
-                    _id = self.bbox_tracking(stamp, cx, cy, w, h, tarpos)
+    0.5, (0, 255, 255), 1, cv2.LINE_AA)
+            else:
+                cv2.rectangle(img_gray, pt1, pt2, (0, 255, 0), 2)
+                cv2.putText(img_gray, "RIGHT BBOX", (10, 40), cv2.FONT_HERSHEY_SIMPLEX,1, (0, 255, 255), 1, cv2.LINE_AA)
 
-                    if _id < self.MAX_DRONE_ID:
-                        self.pub_detection(_id, tarpos, stamp)
-                        detected_objects.append((_id, dpos))
-
-                    cv2.putText(img_gray, "ID {}".format(_id), pt1, cv2.FONT_HERSHEY_SIMPLEX,
-  1, (230, 25, 155), 2, cv2.LINE_AA)
-                    bboxes.append((pt1, pt2))
-                    bboxes_unit.append((cx, cy, w, h))
-                
-                
-
-
-        rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
-        ret = []
+    def show_debug_img(self, img_gray):
         if self.debug_show != "":
             self.project_estimate_node_img(img_gray)
     
@@ -344,7 +356,75 @@ class SwarmDetector:
         elif self.debug_show == "cv":
             _img = cv2.resize(img_gray, (1280, 960))
             cv2.imshow("YOLO", _img)
-            cv2.waitKey(1)
+            cv2.waitKey(-1)
+            
+    def img_callback(self, img, depth_img):
+        img_size = self.img_size
+        ts = rospy.get_time()
+        stamp = img.header.stamp
+        img_gray = self.bridge.imgmsg_to_cv2(img, "mono8")
+        img_ = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
+        # print("GRAY", img.header.stamp)
+        self.count += 1
+        if self.count % 3 != 1:
+            if self.debug_tracker is not None:
+                self.tracker_draw_tracking(img_gray, img_)
+                self.show_debug_img(img_)
+            return
+
+        
+        depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
+        height, width = img_gray.shape[:2]
+
+       
+        bboxes = []
+        bboxes_unit = []
+        detected_objects = []
+        data = self.detect_by_yolo(img_)
+        if self.debug_tracker is not None:
+            self.tracker_draw_tracking(img_gray, img_)
+
+        for i in range(len(data)):
+            x1, y1, x2, y2, conf, cls_conf, cls_pred = data[i,0:7]
+            if x2 - x1 < 0.03*img_size or  y2 - y1 < 0.02*img_size:
+                continue
+
+            pt1 = int(x1/img_size*width), int(y1/img_size*height)
+            pt2 = int(x2/img_size*width), int(y2/img_size*height)
+            
+            bbox_width = (x2 - x1)/img_size*width
+            cx = (x1+x2)/(img_size*2)
+            cy = (y1+y2)/(img_size*2)
+            w = (x2 - x1)/img_size
+            h = (y2 - y1)/img_size
+            
+            d = estimate_distance(depth, cx, cy, self.intrinsic)
+            
+            xremin, yremin, xremax, yremax = reprojectBoundBox(cx, cy, d, self.intrinsic)
+            
+            width_re = xremax - xremin
+            
+            bbox_rate = width_re / bbox_width
+            bbox_wrong = bbox_rate < 0.4 or bbox_rate > 1.6
+            
+            
+            self.draw_bbox_debug_info(bbox_wrong, img_, pt1, pt2, bbox_rate, d, width_re)
+
+            if not bbox_wrong:
+                tarpos, dpos = self.predict_3dpose(cx, cy, d)
+                _id = self.bbox_tracking(stamp, cx, cy, w, h, tarpos, img_, img_gray)
+
+                if _id < self.MAX_DRONE_ID:
+                    self.pub_detection(_id, tarpos, stamp)
+                    detected_objects.append((_id, dpos))
+                if self.debug_show:
+                    cv2.putText(img_, "ID {}".format(_id), pt1, cv2.FONT_HERSHEY_SIMPLEX, 1, (230, 25, 155), 2, cv2.LINE_AA)
+                bboxes.append((pt1, pt2))
+                bboxes_unit.append((cx, cy, w, h))
+            
+                
+        rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
+        self.show_debug_img(img_)
             
         self.publish_alldetected(detected_objects, stamp)
         
@@ -377,8 +457,8 @@ class SwarmDetectorNode:
             nms_thres=nms_thres,
             debug_show="cv")
 
-        rospy.Subscriber("/camera/infra1/image_rect_raw", sensor_msgs.msg.Image, self.gray_callback, queue_size=1)
-        rospy.Subscriber("/camera/depth/image_rect_raw", sensor_msgs.msg.Image, self.depth_callback, queue_size=1)
+        rospy.Subscriber("/camera/infra1/image_rect_raw", sensor_msgs.msg.Image, self.gray_callback, queue_size=1000)
+        rospy.Subscriber("/camera/depth/image_rect_raw", sensor_msgs.msg.Image, self.depth_callback, queue_size=1000)
         rospy.Subscriber("/swarm_drones/swarm_drone_fused", swarm_fused, self.swarm_drone_fused_callback, queue_size=1)
         rospy.Subscriber("/vins_estimator/imu_propagate", Odometry, self.vo_callback, queue_size=1)
         self.depth_img = None
@@ -440,8 +520,8 @@ class SwarmDetectorNode:
 
     def gray_callback(self, img_msg):
         self.gray_img = img_msg
-        if self.depth_img is not None and self.gray_img.header.stamp == self.gray_img.header.stamp:
-            #print("Processing ", self.gray_img.header.stamp)
+        # if self.depth_img is not None and self.gray_img.header.stamp == self.gray_img.header.stamp:
+        if self.depth_img is not None:
             self.sd.img_callback(img_msg, self.depth_img)
 
 
