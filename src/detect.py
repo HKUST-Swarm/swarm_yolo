@@ -137,52 +137,24 @@ class SwarmDetector:
         self.last_gray = None
     
     def start_tracker_tracking(self, _id, frame, bbox):
-        feature_params = dict( maxCorners = 100,
-                       qualityLevel = 0.3,
-                       minDistance = 2,
-                       blockSize = 7 )
-        self.last_gray = frame.copy()
-        self.debug_tracker = 1
-        x, y, w, h = bbox.toCVBOX()
-        self.p0 = []
-        for i in range(1, 10, 2):
-            for j in range(1, 10, 2):
-                self.p0.append([[
-                    float(x + i/10.0*w),
-                    float(y + j/10.0*h)
-                ]])
-        self.p0 = np.array(self.p0, dtype=np.float32)
-        # print(self.p0)
-        # self.debug_tracker = cv2.Tracker_create("KCF")
-        # print("INIT tracker", bbox.toCVBOX())
-        # self.debug_tracker.init(frame, bbox.toCVBOX())
+         #self.debug_tracker = cv2.TrackerCSRT_create()
+         #self.debug_tracker = cv2.TrackerKCF_create()
+         #self.debug_tracker = cv2.TrackerMIL_create()
+         self.debug_tracker = cv2.TrackerMOSSE_create()
+            
+         print("INIT tracker", bbox.toCVBOX())
+         self.debug_tracker.init(frame, bbox.toCVBOX())
 
     def tracker_draw_tracking(self, frame, frame_color):
-        #(success, box) = self.debug_tracker.update(frame)
-        #if success:
-        #    (x, y, w, h) = [int(v) for v in box]
-        #    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 100, 100), 2)
-        #    cv2.putText(frame, "TRACKER", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 100, 100), 2, cv2.LINE_AA)
-        #else:
-        #    self.debug_tracker = None
-
-        p0 = self.p0
-        lk_params = dict( winSize  = (15,15),
-                  maxLevel = 2,
-                  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
-        p1, st, err = cv2.calcOpticalFlowPyrLK(self.last_gray, frame, p0, None, **lk_params)
-
-
-        good_new = p1[st==1]
-        good_old = p0[st==1]
-
-        # draw the tracks
-        for i,(new,old) in enumerate(zip(good_new,good_old)):
-            a,b = new.ravel()
-            c,d = old.ravel()
-            cv2.line(frame_color, (a,b),(c,d), color[i].tolist(), 2)
-            cv2.circle(frame_color,(a,b),5,color[i].tolist(),-1)
-        self.p0 = good_new.reshape(-1,1,2)
+        (success, box) = self.debug_tracker.update(frame)
+        if success:
+            (x, y, w, h) = [int(v) for v in box]
+            if self.debug_show != "":
+                cv2.rectangle(frame_color, (x, y), (x+w, y+h), (0, 100, 100), 2)
+                cv2.putText(frame_color, "TRACKER", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 100, 100), 2, cv2.LINE_AA)
+        else:
+            print("Track failed")
+            self.debug_tracker = None
 
         
     def add_bbox(self, ts, bbox):
@@ -356,7 +328,7 @@ class SwarmDetector:
         elif self.debug_show == "cv":
             _img = cv2.resize(img_gray, (1280, 960))
             cv2.imshow("YOLO", _img)
-            cv2.waitKey(-1)
+            cv2.waitKey(2)
             
     def img_callback(self, img, depth_img):
         img_size = self.img_size
@@ -369,7 +341,9 @@ class SwarmDetector:
         if self.count % 3 != 1:
             if self.debug_tracker is not None:
                 self.tracker_draw_tracking(img_gray, img_)
+                rospy.loginfo(" Tracker total use time {:f}ms".format((rospy.get_time() - ts)*1000))
                 self.show_debug_img(img_)
+                
             return
 
         
