@@ -39,6 +39,7 @@ debug_show = False
 global count
 count = 0
 color = np.random.randint(0,255,(100,3))
+from torch2trt import torch2trt
 
 class BBox():
     def __init__(self, cx, cy, w, h, _id):
@@ -103,22 +104,25 @@ class SwarmDetector:
 
         # # Set up model
         self.model = model = Darknet(model_def, img_size=img_size).to(device)
+        self.model_backbone = model_backbone = DarknetBackbone(model_def, img_size=img_size).to(device)
+        self.model_end = model_end = DarknetEnd(model_def, img_size=img_size).to(device)
+        
         self.BBOX_TRACKS_FRAME = 3
         self.TRACK_OVERLAP_THRES = 0.2
         
-        if weights_path.endswith(".weights"):
-            # Load darknet weights
-            if torch.cuda.is_available():
-                model.load_darknet_weights(weights_path)
-            else:
-                model.load_darknet_weights(weights_path, map_location='cpu')
+        # Load checkpoint weights
+        if torch.cuda.is_available():
+            model_backbone.load_state_dict(torch.load(weights_path))
+            model_end.load_state_dict(torch.load(weights_path))
+            model.load_state_dict(torch.load(weights_path))
+            
         else:
-            # Load checkpoint weights
-            if torch.cuda.is_available():
-                model.load_state_dict(torch.load(weights_path))
-            else:
-                model.load_state_dict(torch.load(weights_path, map_location='cpu'))
+            model_backbone.load_state_dict(torch.load(weights_path, map_location='cpu'))
+            model_end.load_state_dict(torch.load(weights_path, map_location='cpu'))
+            model.load_state_dict(torch.load(weights_path, map_location='cpu'))
 
+        model_backbone.eval()  # Set in evaluation mode
+        model_end.eval()  # Set in evaluation mode
         model.eval()  # Set in evaluation mode
 
 
@@ -138,6 +142,10 @@ class SwarmDetector:
         self.trackers_bboxs = {}
         self.WIDTH = 640.0
         self.HEIGHT = 480.0
+
+        self.use_tensorrt = True
+        
+        self.first_init = True
     
     def start_tracker_tracking(self, _id, frame, bbox):
         if _id in self.multi_trackers:
@@ -321,16 +329,33 @@ class SwarmDetector:
             transforms.ToTensor(),
         ])
 
+
         img_size = self.img_size
         img_ = cv2.resize(img_gray, (img_size, img_size))
 
         image = loader(img_).cuda()
         #image = image.view(1, img_size, img_size).expand(3, -1, -1)
+        if self.first_init and self.use_tensorrt:
+            rospy.loginfo("CONVERTING MODEL to trt")
+            self.model_backbone = torch2trt(self.model_backbone, [image.unsqueeze(0)])
+            rospy.loginfo("Finish converion")
+            
+            self.first_init = False
 
         
         with torch.no_grad():
-            detections = self.model(image.unsqueeze(0))
-            detections = non_max_suppression(detections, self.conf_thres, self.nms_thres)
+            if not self.use_tensorrt:
+                detections = self.model(image.unsqueeze(0))
+                #print("DTS ", detections.shape)
+                detections = non_max_suppression(detections, self.conf_thres, self.nms_thres)
+            else:
+                #print("Using converted")
+                x, x8, x13 = self.model_backbone(image.unsqueeze(0))
+                #print("Finish backbone", x.shape, x8.shape, x13.shape)
+                detections = self.model_end(x, x8, x13)
+                #print("Finish end", detections.shape)
+                #print(detections)
+                detections = non_max_suppression(detections, self.conf_thres, self.nms_thres)
             
         rospy.loginfo_throttle(1.0, "Detection use time {:f}ms".format((rospy.get_time() - ts)*1000))
         if detections[0] is not None:
@@ -361,7 +386,7 @@ class SwarmDetector:
         elif self.debug_show == "cv":
             _img = cv2.resize(img_gray, (1280, 960))
             cv2.imshow("YOLO", _img)
-            cv2.waitKey(-1)
+            cv2.waitKey(2)
             
     def img_callback(self, img, depth_img):
         img_size = self.img_size
@@ -373,8 +398,8 @@ class SwarmDetector:
         self.count += 1
         self.tracker_draw_tracking(img_gray, img_)
         
-        if self.count % 3 != 1:
-            return img_
+        # if self.count % 3 != 1:
+            # return img_
 
         
         depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
@@ -426,7 +451,7 @@ class SwarmDetector:
             
                 
         rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
-        #self.show_debug_img(img_)
+        self.show_debug_img(img_)
         self.publish_alldetected(detected_objects, stamp)
         return img_
     
@@ -456,8 +481,8 @@ class SwarmDetectorNode:
             nms_thres=nms_thres,
             debug_show="cv")
 
-        rospy.Subscriber("/camera/infra1/image_rect_raw", sensor_msgs.msg.Image, self.gray_callback, queue_size=1000)
-        rospy.Subscriber("/camera/depth/image_rect_raw", sensor_msgs.msg.Image, self.depth_callback, queue_size=1000)
+        rospy.Subscriber("/camera/infra1/image_rect_raw", sensor_msgs.msg.Image, self.gray_callback, queue_size=1)
+        rospy.Subscriber("/camera/depth/image_rect_raw", sensor_msgs.msg.Image, self.depth_callback, queue_size=1)
         rospy.Subscriber("/swarm_drones/swarm_drone_fused", swarm_fused, self.swarm_drone_fused_callback, queue_size=1)
         rospy.Subscriber("/vins_estimator/imu_propagate", Odometry, self.vo_callback, queue_size=1)
         self.depth_img = None

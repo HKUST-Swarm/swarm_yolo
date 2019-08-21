@@ -11,6 +11,36 @@ from utils.utils import build_targets, to_cpu, non_max_suppression
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import numpy as np
+
+import tensorrt as trt
+import torch2trt
+
+logger = trt.Logger(trt.Logger.INFO)
+trt.init_libnvinfer_plugins(logger, '')
+
+
+@torch2trt.tensorrt_converter('torch.nn.functional.leaky_relu')
+def convert_leaky_relu(ctx):
+    input = ctx.method_args[0]
+    output = ctx.method_return
+    
+    if len(ctx.method_args) > 1:
+        negative_slope = ctx.method_args[1]
+    elif 'negative_slope' in ctx.method_kwargs:
+        negative_slope = ctx.method_kwargs['negative_slope']
+    
+    registry = trt.get_plugin_registry()
+    
+    creator = [c for c in registry.plugin_creator_list if c.name == 'LReLU_TRT'][0]
+    lrelu_slope_field = trt.PluginField("neg_slope", np.array([negative_slope], dtype=np.float32), trt.PluginFieldType.FLOAT32)
+    field_collection = trt.PluginFieldCollection([lrelu_slope_field])
+    plugin = creator.create_plugin(name='LReLU_TRT', field_collection=field_collection)
+            
+    layer = ctx.network.add_plugin_v2(inputs=[input._trt], plugin=plugin)
+                                  
+    output._trt = layer.get_output(0)
+
 
 
 def create_modules(module_defs):
@@ -90,6 +120,8 @@ def create_modules(module_defs):
         output_filters.append(filters)
 
     return hyperparams, module_list
+
+
 
 
 class Upsample(nn.Module):
@@ -239,7 +271,6 @@ class YOLOLayer(nn.Module):
 
             return output, total_loss
 
-
 class Darknet(nn.Module):
     """YOLOv3 object detection model"""
 
@@ -251,20 +282,31 @@ class Darknet(nn.Module):
         self.img_size = img_size
         self.seen = 0
         self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+        #print(self.module_list)
+
 
     def forward(self, x, targets=None):
         img_dim = x.shape[2]
         loss = 0
         layer_outputs, yolo_outputs = [], []
         for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
+            #print("Module", module)
             if module_def["type"] in ["convolutional", "upsample", "maxpool"]:
                 x = module(x)
             elif module_def["type"] == "route":
+                for layer_i in module_def["layers"].split(","):
+                    if int(layer_i) == 8:
+                        pass
+                    if int(layer_i) == -4:
+                        pass
+                        #rint(int(layer_i), layer_outputs[int(layer_i)].shape)
                 x = torch.cat([layer_outputs[int(layer_i)] for layer_i in module_def["layers"].split(",")], 1)
             elif module_def["type"] == "shortcut":
                 layer_i = int(module_def["from"])
                 x = layer_outputs[-1] + layer_outputs[layer_i]
             elif module_def["type"] == "yolo":
+                #print(x.shape)
+                #return x
                 x, layer_loss = module[0](x, targets, img_dim)
                 loss += layer_loss
                 yolo_outputs.append(x)
@@ -352,3 +394,76 @@ class Darknet(nn.Module):
                 conv_layer.weight.data.cpu().numpy().tofile(fp)
 
         fp.close()
+
+
+class DarknetBackbone(nn.Module):
+    """YOLOv3 object detection model"""
+
+    def __init__(self, config_path, img_size=416):
+        super(DarknetBackbone, self).__init__()
+        self.module_defs = parse_model_config(config_path)
+        self.hyperparams, self.module_list = create_modules(self.module_defs)
+        self.yolo_layers = [layer[0] for layer in self.module_list if hasattr(layer[0], "metrics")]
+        self.img_size = img_size
+        self.seen = 0
+        self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+        #print(self.module_list)
+
+
+    def forward(self, x, targets=None):
+        for i, (module_def, module) in enumerate(zip(self.module_defs[:16], self.module_list[:16])):
+            if module_def["type"] in ["convolutional", "upsample", "maxpool"]:
+                x = module(x)
+                #print(i, x.shape)
+                if i == 8:
+                    x8 = x
+                if i == 13:
+                    x13 = x
+        return x, x8, x13
+
+class DarknetEnd(nn.Module):
+    """YOLOv3 object detection model"""
+
+    def __init__(self, config_path, img_size=416):
+        super(DarknetEnd, self).__init__()
+        self.module_defs = parse_model_config(config_path)
+        self.hyperparams, self.module_list = create_modules(self.module_defs)
+        self.yolo_layers = [layer[0] for layer in self.module_list if hasattr(layer[0], "metrics")]
+        self.img_size = img_size
+        self.seen = 0
+        self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+
+
+    def forward(self, x, x8, x13, targets=None):
+        img_dim = 416
+        loss = 0
+        layer_outputs, yolo_outputs = [], []
+        for i, (module_def, module) in enumerate(zip(self.module_defs[16:], self.module_list[16:])):
+            #print("Module", module)
+            #print(i)
+            if module_def["type"] in ["convolutional", "upsample", "maxpool"]:
+                x = module(x)
+                #print(x)
+            elif module_def["type"] == "route":
+                #print("LEN of layer outputs {}, the layer wanter {}".format(len(layer_outputs), module_def["layers"]))
+                arr = []
+                for layer_i in module_def["layers"].split(","):
+                    if int(layer_i) == 8:
+                        arr.append(x8)
+                    elif int(layer_i) == -4:
+                        arr.append(x13)
+                    else:
+                        arr.append(layer_outputs[int(layer_i)])
+                x = torch.cat(arr , 1)
+
+            elif module_def["type"] == "shortcut":
+                layer_i = int(module_def["from"])
+                x = layer_outputs[-1] + layer_outputs[layer_i]
+            elif module_def["type"] == "yolo":
+                #print(x.shape)
+                x, layer_loss = module[0](x, targets, img_dim)
+                loss += layer_loss
+                yolo_outputs.append(x)
+            layer_outputs.append(x)
+        yolo_outputs = to_cpu(torch.cat(yolo_outputs, 1))
+        return yolo_outputs if targets is None else (loss, yolo_outputs)
