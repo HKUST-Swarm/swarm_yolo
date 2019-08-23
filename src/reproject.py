@@ -12,8 +12,9 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from scipy.spatial.transform import Rotation as R
 from tf.transformations import *
-from IPython import display
+# from IPython import display
 import os
+
 def read_bag(_bag):
     poses2index = {
         "/swarm_mocap/SwarmNodePose0":0,
