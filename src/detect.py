@@ -39,7 +39,9 @@ debug_show = False
 global count
 count = 0
 color = np.random.randint(0,255,(100,3))
+
 from torch2trt import torch2trt
+
 
 class BBox():
     def __init__(self, cx, cy, w, h, _id):
@@ -76,7 +78,7 @@ class BBox():
 
 
 class SwarmDetector:
-    def __init__(self, img_size=416, conf_thres=0.9, nms_thres=0.1,debug_show="", weights_path="./weights/yolov3-tiny_drone.pth", model_def="config/yolov3-tiny-1class.cfg", class_path="config/drone.names"):
+    def __init__(self, img_size=416, conf_thres=0.9, nms_thres=0.1,debug_show="", weights_trt_path="./weights/", weights_path="./weights/", model_def="config/yolov3-tiny-1class.cfg", class_path="config/drone.names"):
         self.bridge = CvBridge()
         self.debug_show = debug_show
         self.img_size = img_size
@@ -102,32 +104,6 @@ class SwarmDetector:
 
         self.camera_pos = np.array([0.044, -0.035, 0.0])
 
-        # # Set up model
-        self.model = model = Darknet(model_def, img_size=img_size).to(device)
-        self.model_backbone = model_backbone = DarknetBackbone(model_def, img_size=img_size).to(device)
-        self.model_end = model_end = DarknetEnd(model_def, img_size=img_size).to(device)
-        
-        self.BBOX_TRACKS_FRAME = 3
-        self.TRACK_OVERLAP_THRES = 0.2
-        
-        # Load checkpoint weights
-        if torch.cuda.is_available():
-            model_backbone.load_state_dict(torch.load(weights_path))
-            model_end.load_state_dict(torch.load(weights_path))
-            model.load_state_dict(torch.load(weights_path))
-            
-        else:
-            model_backbone.load_state_dict(torch.load(weights_path, map_location='cpu'))
-            model_end.load_state_dict(torch.load(weights_path, map_location='cpu'))
-            model.load_state_dict(torch.load(weights_path, map_location='cpu'))
-
-        model_backbone.eval()  # Set in evaluation mode
-        model_end.eval()  # Set in evaluation mode
-        model.eval()  # Set in evaluation mode
-
-
-        classes = load_classes(class_path)  # Extracts class labels from file
-
         Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
         self.intrinsic = {
             "fx":384.12,
@@ -143,9 +119,52 @@ class SwarmDetector:
         self.WIDTH = 640.0
         self.HEIGHT = 480.0
 
-        self.use_tensorrt = True
-        
+        self.use_tensorrt = False
         self.first_init = True
+        self.load_model(weights_path, weights_trt_path, model_def)        
+
+    
+    def load_model(self, weights_path, weights_trt_path, model_def):
+        img_size = self.img_size
+        device = self.device
+          # # Set up model
+        if self.use_tensorrt:
+            print("Using TENSORRT; Load TensorRT model")
+            self.model_backbone = model_backbone = DarknetBackbone(model_def, img_size=img_size).to(device)
+            self.model_end = model_end = DarknetEnd(model_def, img_size=img_size).to(device)
+        else:
+            self.model = model = Darknet(model_def, img_size=img_size).to(device)
+        
+        # classes = load_classes(class_path)  # Extracts class labels from file
+        self.BBOX_TRACKS_FRAME = 3
+        self.TRACK_OVERLAP_THRES = 0.2
+        
+        # Load checkpoint weights
+        if torch.cuda.is_available():
+            if self.use_tensorrt:
+                print(weights_trt_path)
+                model_backbone.load_state_dict(torch.load(weights_path))
+                model_end.load_state_dict(torch.load(weights_path))
+
+                example_data = torch.zeros((1, 3, img_size, img_size)).cuda()
+                print("Convering model to TensorRT")
+                self.model_backbone = model_backbone = torch2trt(model_backbone, [example_data], fp16_mode=True)
+                print("Converting done;")
+
+            else:
+                model.load_state_dict(torch.load(weights_path))        
+        else:
+            if self.use_tensorrt:
+                model_backbone.load_state_dict(torch.load(weights_path, map_location='cpu'))
+                model_end.load_state_dict(torch.load(weights_path, map_location='cpu'))
+            else:
+                model.load_state_dict(torch.load(weights_path, map_location='cpu'))
+        
+        if self.use_tensorrt:
+            model_backbone.eval()  # Set in evaluation mode
+            model_end.eval()  # Set in evaluation mode
+        else:
+            model.eval()  # Set in evaluation mode
     
     def start_tracker_tracking(self, _id, frame, bbox):
         if _id in self.multi_trackers:
@@ -334,14 +353,6 @@ class SwarmDetector:
         img_ = cv2.resize(img_gray, (img_size, img_size))
 
         image = loader(img_).cuda()
-        #image = image.view(1, img_size, img_size).expand(3, -1, -1)
-        if self.first_init and self.use_tensorrt:
-            rospy.loginfo("CONVERTING MODEL to trt")
-            self.model_backbone = torch2trt(self.model_backbone, [image.unsqueeze(0)])
-            rospy.loginfo("Finish converion")
-            
-            self.first_init = False
-
         
         with torch.no_grad():
             if not self.use_tensorrt:
@@ -460,6 +471,7 @@ class SwarmDetectorNode:
         image_topic = rospy.get_param('~image_topic')
         model_def = rospy.get_param('~model_def')
         weights_path = rospy.get_param('~weights_path')
+        weights_trt_path = rospy.get_param('~weights_trt_path')
         class_path = rospy.get_param('~class_path')
         self.conf_thres = conf_thres = rospy.get_param('~conf_thres', 0.9) # Upper than some value
         self.nms_thres = nms_thres = rospy.get_param('~nms_thres', 0.1)
@@ -476,6 +488,7 @@ class SwarmDetectorNode:
         self.sd = SwarmDetector(model_def=model_def, 
             class_path=class_path, 
             img_size=img_size, 
+            weights_trt_path=weights_trt_path, 
             weights_path=weights_path, 
             conf_thres=conf_thres,
             nms_thres=nms_thres,

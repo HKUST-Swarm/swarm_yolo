@@ -299,6 +299,7 @@ class Darknet(nn.Module):
                         pass
                     if int(layer_i) == -4:
                         pass
+                        #return layer_outputs[int(layer_i)]
                         #rint(int(layer_i), layer_outputs[int(layer_i)].shape)
                 x = torch.cat([layer_outputs[int(layer_i)] for layer_i in module_def["layers"].split(",")], 1)
             elif module_def["type"] == "shortcut":
@@ -399,7 +400,7 @@ class Darknet(nn.Module):
 class DarknetBackbone(nn.Module):
     """YOLOv3 object detection model"""
 
-    def __init__(self, config_path, img_size=416):
+    def __init__(self, config_path, img_size=416, depth=14):
         super(DarknetBackbone, self).__init__()
         self.module_defs = parse_model_config(config_path)
         self.hyperparams, self.module_list = create_modules(self.module_defs)
@@ -407,19 +408,18 @@ class DarknetBackbone(nn.Module):
         self.img_size = img_size
         self.seen = 0
         self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+        self.depth = depth
         #print(self.module_list)
 
 
     def forward(self, x, targets=None):
-        for i, (module_def, module) in enumerate(zip(self.module_defs[:16], self.module_list[:16])):
+        for i, (module_def, module) in enumerate(zip(self.module_defs[:self.depth], self.module_list[:self.depth])):
             if module_def["type"] in ["convolutional", "upsample", "maxpool"]:
                 x = module(x)
                 #print(i, x.shape)
                 if i == 8:
                     x8 = x
-                if i == 13:
-                    x13 = x
-        return x, x8, x13
+        return x, x8
 
 class DarknetEnd(nn.Module):
     """YOLOv3 object detection model"""
@@ -434,11 +434,12 @@ class DarknetEnd(nn.Module):
         self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
 
 
-    def forward(self, x, x8, x13, targets=None):
+    def forward(self, x, x8, targets=None):
         img_dim = 416
         loss = 0
         layer_outputs, yolo_outputs = [], []
-        for i, (module_def, module) in enumerate(zip(self.module_defs[16:], self.module_list[16:])):
+        layer_outputs.append(x)
+        for i, (module_def, module) in enumerate(zip(self.module_defs[14:], self.module_list[14:])):
             #print("Module", module)
             #print(i)
             if module_def["type"] in ["convolutional", "upsample", "maxpool"]:
@@ -450,8 +451,8 @@ class DarknetEnd(nn.Module):
                 for layer_i in module_def["layers"].split(","):
                     if int(layer_i) == 8:
                         arr.append(x8)
-                    elif int(layer_i) == -4:
-                        arr.append(x13)
+                    #elif int(layer_i) == -4:
+                    #    arr.append(x13)
                     else:
                         arr.append(layer_outputs[int(layer_i)])
                 x = torch.cat(arr , 1)
@@ -461,9 +462,12 @@ class DarknetEnd(nn.Module):
                 x = layer_outputs[-1] + layer_outputs[layer_i]
             elif module_def["type"] == "yolo":
                 #print(x.shape)
+                return x
+                
                 x, layer_loss = module[0](x, targets, img_dim)
                 loss += layer_loss
                 yolo_outputs.append(x)
+                return x
             layer_outputs.append(x)
         yolo_outputs = to_cpu(torch.cat(yolo_outputs, 1))
         return yolo_outputs if targets is None else (loss, yolo_outputs)
