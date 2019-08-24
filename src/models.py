@@ -13,33 +13,33 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 
-import tensorrt as trt
-import torch2trt
+#import tensorrt as trt
+#import torch2trt
 
-logger = trt.Logger(trt.Logger.INFO)
-trt.init_libnvinfer_plugins(logger, '')
+#logger = trt.Logger(trt.Logger.INFO)
+#trt.init_libnvinfer_plugins(logger, '')
 
 
-@torch2trt.tensorrt_converter('torch.nn.functional.leaky_relu')
-def convert_leaky_relu(ctx):
-    input = ctx.method_args[0]
-    output = ctx.method_return
+# @torch2trt.tensorrt_converter('torch.nn.functional.leaky_relu')
+# def convert_leaky_relu(ctx):
+#     input = ctx.method_args[0]
+#     output = ctx.method_return
     
-    if len(ctx.method_args) > 1:
-        negative_slope = ctx.method_args[1]
-    elif 'negative_slope' in ctx.method_kwargs:
-        negative_slope = ctx.method_kwargs['negative_slope']
+#     if len(ctx.method_args) > 1:
+#         negative_slope = ctx.method_args[1]
+#     elif 'negative_slope' in ctx.method_kwargs:
+#         negative_slope = ctx.method_kwargs['negative_slope']
     
-    registry = trt.get_plugin_registry()
+#     registry = trt.get_plugin_registry()
     
-    creator = [c for c in registry.plugin_creator_list if c.name == 'LReLU_TRT'][0]
-    lrelu_slope_field = trt.PluginField("neg_slope", np.array([negative_slope], dtype=np.float32), trt.PluginFieldType.FLOAT32)
-    field_collection = trt.PluginFieldCollection([lrelu_slope_field])
-    plugin = creator.create_plugin(name='LReLU_TRT', field_collection=field_collection)
+#     creator = [c for c in registry.plugin_creator_list if c.name == 'LReLU_TRT'][0]
+#     lrelu_slope_field = trt.PluginField("neg_slope", np.array([negative_slope], dtype=np.float32), trt.PluginFieldType.FLOAT32)
+#     field_collection = trt.PluginFieldCollection([lrelu_slope_field])
+#     plugin = creator.create_plugin(name='LReLU_TRT', field_collection=field_collection)
             
-    layer = ctx.network.add_plugin_v2(inputs=[input._trt], plugin=plugin)
+#     layer = ctx.network.add_plugin_v2(inputs=[input._trt], plugin=plugin)
                                   
-    output._trt = layer.get_output(0)
+#     output._trt = layer.get_output(0)
 
 
 

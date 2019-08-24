@@ -40,7 +40,7 @@ global count
 count = 0
 color = np.random.randint(0,255,(100,3))
 
-from torch2trt import torch2trt
+#from torch2trt import torch2trt
 
 
 class BBox():
@@ -78,7 +78,7 @@ class BBox():
 
 
 class SwarmDetector:
-    def __init__(self, img_size=416, conf_thres=0.9, nms_thres=0.1,debug_show="", weights_trt_path="./weights/", weights_path="./weights/", model_def="config/yolov3-tiny-1class.cfg", class_path="config/drone.names"):
+    def __init__(self, img_size=416, conf_thres=0.6, nms_thres=0.1,debug_show="", weights_trt_path="./weights/", weights_path="./weights/", model_def="config/yolov3-tiny-1class.cfg", class_path="config/drone.names"):
         self.bridge = CvBridge()
         self.debug_show = debug_show
         self.img_size = img_size
@@ -121,7 +121,10 @@ class SwarmDetector:
 
         self.use_tensorrt = False
         self.first_init = True
-        self.load_model(weights_path, weights_trt_path, model_def)        
+        self.tracker_only_on_matched = False
+        self.load_model(weights_path, weights_trt_path, model_def)  
+
+        print("Model loaded; waiting for data")      
 
     
     def load_model(self, weights_path, weights_trt_path, model_def):
@@ -236,11 +239,12 @@ class SwarmDetector:
             pose = self.estimate_node_poses[_id]
             target_pos = pose[0:3]
             err = est_pos - target_pos
-            err_norm = np.linalg.norm(_err)
+            err_norm = np.linalg.norm(err)
             if np.abs(err[0]) < self.MAX_XY_MATCHERR and np.abs(err[1]) < self.MAX_XY_MATCHERR and np.abs(err[2]) < self.MAX_Z_MATCHERR and err_norm < _match_err_norm:
                 _match_id = _id
                 _match_err_norm = err_norm
-                
+        if _match_id is not None:
+            print("Matched ", _match_id)
         return _match_id
     
     def estimate_bbox_id(self, bbox):
@@ -270,8 +274,6 @@ class SwarmDetector:
             del self.multi_trackers[_id]
         
     def bbox_tracking(self, ts, cx, cy, w, h, est_pos, frame, frame_gray):
-        # TODO: When multiple in sphere, we need choose the nearest one
-        #print(est_pos)
         bbox = BBox(cx, cy, w, h, -1)
 
         #if self.debug_tracker is None:
@@ -279,6 +281,7 @@ class SwarmDetector:
         _id = self.estimate_bbox_id(bbox)
         
         if _id is None:
+            rospy.loginfo("Found new object {}".format(_id))
             _id = random.randint(100, 1000)
         else:
             self.remove_tracker(_id)
@@ -286,10 +289,12 @@ class SwarmDetector:
             
         if _id > self.MAX_DRONE_ID and _match_id is not None:
             _id = _match_id
+            rospy.loginfo("Object {} match to Drone {}".format(_id, _match_id))
         
         bbox.id = _id
-        
-        self.start_tracker_tracking(_id, frame_gray, bbox)
+
+        if (not self.tracker_only_on_matched) or (self.tracker_only_on_matched and _id < self.MAX_DRONE_ID):
+            self.start_tracker_tracking(_id, frame_gray, bbox)
             
         self.add_bbox(ts, bbox)
         
@@ -361,16 +366,16 @@ class SwarmDetector:
                 detections = non_max_suppression(detections, self.conf_thres, self.nms_thres)
             else:
                 #print("Using converted")
-                x, x8, x13 = self.model_backbone(image.unsqueeze(0))
+                x, x8 = self.model_backbone(image.unsqueeze(0))
                 #print("Finish backbone", x.shape, x8.shape, x13.shape)
-                detections = self.model_end(x, x8, x13)
+                detections = self.model_end(x, x8)
                 #print("Finish end", detections.shape)
                 #print(detections)
                 detections = non_max_suppression(detections, self.conf_thres, self.nms_thres)
             
         rospy.loginfo_throttle(1.0, "Detection use time {:f}ms".format((rospy.get_time() - ts)*1000))
         if detections[0] is not None:
-            return detections[0].numpy()
+            return detections[0].cpu().numpy()
         return []
 
     def draw_bbox_debug_info(self, bbox_wrong, img_gray, pt1, pt2, bbox_rate, d, width_re):
@@ -408,9 +413,11 @@ class SwarmDetector:
         # print("GRAY", img.header.stamp)
         self.count += 1
         self.tracker_draw_tracking(img_gray, img_)
-        
-        # if self.count % 3 != 1:
-            # return img_
+        #rospy.loginfo("Track use time {:f}ms".format((rospy.get_time() - ts)*1000))
+        rospy.loginfo("DT stamp {}".format(stamp - depth_img.header.stamp))
+        if self.count % 3 != 1:
+            rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
+            return img_
 
         
         depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
@@ -451,11 +458,13 @@ class SwarmDetector:
             if not bbox_wrong:
                 tarpos, dpos = self.predict_3dpose(cx, cy, d)
                 _id = self.bbox_tracking(stamp, cx, cy, w, h, tarpos, img_, img_gray)
+                print("Not Wrong bbx")
 
                 if _id < self.MAX_DRONE_ID:
                     self.pub_detection(_id, tarpos, stamp)
                     detected_objects.append((_id, dpos))
-                if self.debug_show:
+                    
+                if self.debug_show =="cv":
                     cv2.putText(img_, "ID {}".format(_id), pt1, cv2.FONT_HERSHEY_SIMPLEX, 1, (230, 25, 155), 2, cv2.LINE_AA)
                 bboxes.append((pt1, pt2))
                 bboxes_unit.append((cx, cy, w, h))
@@ -492,7 +501,7 @@ class SwarmDetectorNode:
             weights_path=weights_path, 
             conf_thres=conf_thres,
             nms_thres=nms_thres,
-            debug_show="cv")
+            debug_show=self.debug_show)
 
         rospy.Subscriber("/camera/infra1/image_rect_raw", sensor_msgs.msg.Image, self.gray_callback, queue_size=1)
         rospy.Subscriber("/camera/depth/image_rect_raw", sensor_msgs.msg.Image, self.depth_callback, queue_size=1)
@@ -545,10 +554,9 @@ class SwarmDetectorNode:
     def depth_callback(self, depth_img):
         # print("DEPTH", depth_img.header.stamp)
         self.depth_img = depth_img
-        if self.gray_img is not None and self.depth_img.header.stamp == self.gray_img.header.stamp:
-            pass
-            #print("Processing ", self.gray_img.header.stamp)
-            #self.sd.img_callback(self.gray_img, self.depth_img)
+        #if self.gray_img is not None and self.depth_img.header.stamp == self.gray_img.header.stamp:
+        #    self.sd.img_callback(self.gray_img, self.depth_img)
+        
         # self.depths = cv_image_array = np.array(self.depth_img, dtype = np.dtype('f8'))
         # cv_image_norm = cv2.normalize(cv_image_array, cv_image_array, 0, 1, cv2.NORM_MINMAX)
         # self.depthimg = cv_image_norm
@@ -557,8 +565,7 @@ class SwarmDetectorNode:
 
     def gray_callback(self, img_msg):
         self.gray_img = img_msg
-        # if self.depth_img is not None and self.gray_img.header.stamp == self.gray_img.header.stamp:
-        if self.depth_img is not None:
+        if (self.depth_img is not None) and (self.depth_img.header.stamp == self.gray_img.header.stamp):
             self.sd.img_callback(img_msg, self.depth_img)
 
 

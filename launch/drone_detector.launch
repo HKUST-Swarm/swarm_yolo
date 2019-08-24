@@ -6,6 +6,9 @@
 		<param name="weights_path" type="string" value="$(find swarm_yolo)/weights/yolov3-tiny_drone.pth" />
 		<param name="weights_trt_path" type="string" value="$(find swarm_yolo)/weights/yolov3-tiny_drone_trt.pth" />
 		<param name="class_path" type="string" value="$(find swarm_yolo)/config/drone.names" />
-		<param name="debug_show" type="bool" value="$(arg debug_show)" />
+		<param name="debug_show" type="string" value="$(arg debug_show)" />
+		<rosparam>
+            conf_thres: 0.6
+        </rosparam>
 	</node>
 </launch>
