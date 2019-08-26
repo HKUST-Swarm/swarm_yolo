@@ -349,9 +349,10 @@ class SwarmDetector:
             nd.relpose.pose.position.x = dpos[0]
             nd.relpose.pose.position.y = dpos[1]
             nd.relpose.pose.position.z = dpos[2]
-            nd.relpose.covariance[0] = 0.1*0.1
-            nd.relpose.covariance[6+1] = 0.07*0.07
-            nd.relpose.covariance[2*6+2] = 0.07*0.07
+            dis = np.linalg.norm(dpos)
+            nd.relpose.covariance[0] = 0.05 + dis/3.0*0.05
+            nd.relpose.covariance[6+1] = 0.02 + dis/3.0*0.05
+            nd.relpose.covariance[2*6+2] = 0.02 + dis/3.0*0.05
 
             sw_detected.detected_nodes.append(nd)
 
@@ -446,6 +447,7 @@ class SwarmDetector:
         self.count += 1
         detected_objects = self.tracker_draw_tracking(img_gray, img_to_draw, depth, stamp)
         rospy.loginfo_throttle(1.0, "DT stamp {}".format(stamp - depth_img.header.stamp))
+        
         if self.count % 3 != 1:
             rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
             return img_to_draw
@@ -463,6 +465,7 @@ class SwarmDetector:
 
             if not bbox_wrong:
                 tarpos, dpos = self.predict_3dpose(bbox.cx, bbox.cy, d)
+                #return dpos
                 _id = self.bbox_tracking(stamp, bbox, tarpos, img_gray)
                 #print("Not Wrong bbx")
 
