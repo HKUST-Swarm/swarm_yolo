@@ -25,7 +25,6 @@ from PIL import Image
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from torch.autograd import Variable
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -209,7 +208,7 @@ class SwarmDetector:
         rospy.loginfo_throttle(3.0, "Is tracking {} objects".format(count))
         for _id in ids_need_to_delete:
             del self.multi_trackers[_id]
-
+        #print(objs)
         return objs
             
     def add_bbox(self, ts, bbox):
@@ -250,7 +249,7 @@ class SwarmDetector:
             err = est_pos - target_pos
             #print("Matching EST {} with current {}".format(_id, err))
             err_norm = np.linalg.norm(err)
-            if np.abs(err[0]) < self.MAX_XY_MATCHERR and np.abs(err[1]) < self.MAX_XY_MATCHERR and np.abs(err[2]) < self.MAX_Z_MATCHERR and err_norm < _match_err_norm:
+            if np.abs(err[0]) < self.MAX_XY_MATCHERR and np.abs(err[1]) < self.MAX_XY_MATCHERR and np.abs(err[2]) < self.MAX_Z_MATCHERR and err_norm < _match_err_norm and not(_match_id in self.trackers_bboxs):
                 _match_id = _id
                 _match_err_norm = err_norm
         if _match_id is not None:
@@ -287,6 +286,7 @@ class SwarmDetector:
     def bbox_tracking(self, ts, bbox, est_pos, frame_gray):
 
         #if self.debug_tracker is None:
+        #HERE we need a real matching to avoid multiply match to single object
         _match_id = self.match_pos(est_pos)
         _id = self.estimate_bbox_id(bbox)
         
