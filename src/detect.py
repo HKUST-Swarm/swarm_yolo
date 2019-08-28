@@ -369,7 +369,7 @@ class SwarmDetector:
         img_ = cv2.resize(img_gray, (img_size, img_size))
 
         image = loader(img_).cuda()
-        
+        image = image.view(1, img_size, img_size).expand(3, -1, -1)
         with torch.no_grad():
             if not self.use_tensorrt:
                 detections = self.model(image.unsqueeze(0))
@@ -437,22 +437,25 @@ class SwarmDetector:
         ts = rospy.get_time()
         stamp = img.header.stamp
         img_gray = self.bridge.imgmsg_to_cv2(img, "mono8")
-        img_color = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
-        if self.debug_show is not None:
-            img_to_draw = img_color.copy()
+        #img_color = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
+        img_to_draw = None
+
+        if self.debug_show != "":
+            img_to_draw = img_gray.copy()
+
         depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
         height, width = img_gray.shape[:2]
 
 
         self.count += 1
         detected_objects = self.tracker_draw_tracking(img_gray, img_to_draw, depth, stamp)
-        rospy.loginfo_throttle(1.0, "DT stamp {}".format(stamp - depth_img.header.stamp))
+        #rospy.loginfo(1.0, "DT stamp {}".format(stamp - depth_img.header.stamp))
         
         if self.count % 3 != 1:
-            rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
+            rospy.loginfo("Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
             return img_to_draw
 
-        data = self.detect_by_yolo(img_color)
+        data = self.detect_by_yolo(img_gray)
 
         for i in range(len(data)):
             x1, y1, x2, y2, conf, cls_conf, cls_pred = data[i,0:7]
@@ -478,11 +481,12 @@ class SwarmDetector:
                     cv2.putText(img_to_draw, "ID {}".format(_id), (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1, (230, 25, 155), 2, cv2.LINE_AA)
             
                 
-        rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
         if not force_no_disp:
             self.show_debug_img(img_to_draw)
 
         self.publish_alldetected(detected_objects, stamp)
+        rospy.loginfo("Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
+
         return img_to_draw
     
 class SwarmDetectorNode:
