@@ -113,7 +113,7 @@ class SwarmDetector:
 
         self.use_tensorrt = False
         self.first_init = True
-        self.tracker_only_on_matched = True
+        self.tracker_only_on_matched = False
         self.load_model(weights_path, weights_trt_path, model_def)  
 
         print("Model loaded; waiting for data")      
@@ -205,7 +205,7 @@ class SwarmDetector:
             else:
                 rospy.loginfo("TRACKER {} failed".format(_id))
                 ids_need_to_delete.append(_id)
-        rospy.loginfo_throttle(3.0, "Is tracking {} objects".format(count))
+        rospy.loginfo_throttle(1.0, "Is tracking {} objects".format(count))
         for _id in ids_need_to_delete:
             del self.multi_trackers[_id]
         #print(objs)
@@ -292,14 +292,14 @@ class SwarmDetector:
         
         if _id is None:
             _id = random.randint(100, 1000)
-            rospy.loginfo("Found new object {}".format(_id))
+            rospy.loginfo_throttle(1.0, "Found new object {}".format(_id))
         else:
             self.remove_tracker(_id)
         #Start new track; fix the bounding box
             
         if _id > self.MAX_DRONE_ID and _match_id is not None:
             _id = _match_id
-            rospy.loginfo("Object {} match to Drone {}".format(_id, _match_id))
+            rospy.loginfo_throttle(1.0, "Object {} match to Drone {}".format(_id, _match_id))
         
         bbox.id = _id
 
@@ -452,7 +452,7 @@ class SwarmDetector:
         #rospy.loginfo(1.0, "DT stamp {}".format(stamp - depth_img.header.stamp))
         
         if self.count % 3 != 1:
-            rospy.loginfo("Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
+            rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
             return img_to_draw
 
         data = self.detect_by_yolo(img_gray)
@@ -485,7 +485,7 @@ class SwarmDetector:
             self.show_debug_img(img_to_draw)
 
         self.publish_alldetected(detected_objects, stamp)
-        rospy.loginfo("Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
+        rospy.loginfo_throttle(1.0,"Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
 
         return img_to_draw
     
