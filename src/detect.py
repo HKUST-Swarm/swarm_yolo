@@ -552,7 +552,7 @@ class SwarmDetectorNode:
             crop_img = self.depths[pt1[1]:pt2[1], pt1[0]:pt2[0]]
             w = pt2[0] - pt1[0]
             h = pt2[1] - pt1[1]
-            if self.debug_show:
+            if self.debug_show != "":
                 crop_img_dis = cv2.resize(crop_img, (w*5, h*5))
                 cv2.imshow("cropped {}".format(count), crop_img_dis)
                 cv2.waitKey(10)
