@@ -33,6 +33,10 @@ from swarm_msgs.msg import *
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 #from torch2trt import torch2trt
+# body_T_cam0: !!opencv-matrix
+#    data: [X 4.7252108912910817e-02,
+#        Y 2.5494642335169675e-02,
+#        Z 6.2734860861773656e-02,
 
 
 class BBox():
@@ -94,7 +98,7 @@ class SwarmDetector:
 
         self.device = device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.camera_pos = np.array([0.044, -0.035, 0.0])
+        self.camera_pos = np.array([0.059, 0.012, 0.054])
 
         Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
         self.intrinsic = {
