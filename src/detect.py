@@ -99,6 +99,7 @@ class SwarmDetector:
         self.device = device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.camera_pos = np.array([0.059, 0.012, 0.054])
+        self.d_fix = -0.05
 
         Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
         self.intrinsic = {
@@ -318,7 +319,7 @@ class SwarmDetector:
         tarpos_cam = np.array(XYZ_from_cxy_d(cx, cy, d, self.intrinsic)) #target position in camera frame
         r2 = quaternion_matrix(self.quat)[0:3,0:3]
         
-        dpos_body_frame = np.dot(R_cam_on_drone, tarpos_cam) + self.camera_pos
+        dpos_body_frame = np.dot(R_cam_on_drone, tarpos_cam) + self.camera_pos + np.array([self.d_fix, 0, 0])
         dposyolo_global = np.dot(r2, dpos_body_frame)
         
         pos_global = dposyolo_global + self.pos
@@ -474,6 +475,7 @@ class SwarmDetector:
                 tarpos, dpos = self.predict_3dpose(bbox.cx, bbox.cy, d)
                 #return dpos
                 _id = self.bbox_tracking(stamp, bbox, tarpos, img_gray)
+                print(_id, d, dpos)
                 #print("Not Wrong bbx")
 
                 if _id < self.MAX_DRONE_ID:
