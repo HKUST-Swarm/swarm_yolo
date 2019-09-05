@@ -83,7 +83,7 @@ class SwarmDetector:
         self.history_bbox = []
         self.all_ids = set()
         self.MAX_XY_MATCHERR = 0.3
-        self.MAX_Z_MATCHERR = 0.4
+        self.MAX_Z_MATCHERR = 0.3
         self.MAX_DRONE_ID = 10
 
         self.detected_poses_pub = {}
@@ -456,7 +456,7 @@ class SwarmDetector:
         detected_objects = self.tracker_draw_tracking(img_gray, img_to_draw, depth, stamp)
         #rospy.loginfo(1.0, "DT stamp {}".format(stamp - depth_img.header.stamp))
         
-        if self.count % 3 != 1:
+        if self.count % 6 != 1:
             rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
             return img_to_draw
 
