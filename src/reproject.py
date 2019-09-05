@@ -23,7 +23,7 @@ def read_bag(_bag):
     }
     camera = []
     depth = []
-    
+
     poses = {
         0:[],
         2:[],
@@ -37,7 +37,7 @@ def read_bag(_bag):
             camera.append(msg)
         if topic == "/camera/depth/image_rect_raw":
             depth.append(msg)
-        
+
     return poses, camera, depth
 
 def parse_ros_pose_ts(poses):
@@ -59,7 +59,7 @@ def parse_ros_pose_ts(poses):
     d["quat_func"] = interp1d(d["ts"], d["quat"], axis=0)
     return d
 K_cam_gray = np.array([[384.12371826171875, 0.0, 319.9548645019531],
-                  [0.0, 384.12371826171875, 234.2923126220703], 
+                  [0.0, 384.12371826171875, 234.2923126220703],
                   [0.0, 0.0, 1.0]])
 K_cam_color = np.array([1375.4482421875, 0.0, 950.56201171875, 0.0, 1375.8404541015625, 566.9019165039062, 0.0, 0.0, 1.0])
 K_cam_color = K_cam_color.reshape((3,3))
@@ -85,7 +85,7 @@ def draw_to_cv_image_(_img, d0_pos, d0_quat, d2_pos, d2_quat, text):
     R0 = quaternion_matrix(d0_quat)[0:3, 0:3]
     rvec = np.transpose(np.dot(r, R_cam_on_drone))
     tvec = -np.dot(rvec, d2_pos)
-    
+
     corpoints = np.array([
          d0_pos + np.dot(R0, np.array([0.145, 0.145, -0.02]) + d0_fix), #Center
          d0_pos + np.dot(R0, np.array([0.145, 0.145, -0.02]) + d0_fix),
@@ -94,7 +94,7 @@ def draw_to_cv_image_(_img, d0_pos, d0_quat, d2_pos, d2_quat, text):
          d0_pos + np.dot(R0, np.array([-0.145, -0.145, -0.02]) + d0_fix),
          d0_pos + np.dot(R0, np.array([0, 0, 0.13]) + d0_fix),
      ])
-    
+
 
 
     points, _ = cv2.projectPoints(corpoints, rvec, tvec, K_cam_gray, D_cam)
@@ -103,18 +103,18 @@ def draw_to_cv_image_(_img, d0_pos, d0_quat, d2_pos, d2_quat, text):
     xmax = int(np.max(points[:,:,0]))
     ymin = int(np.min(points[:,:,1]))
     ymax = int(np.max(points[:,:,1]))
-    
+
     draw_image(_img, points, xmin, xmax, ymin, ymax)
     cv2.putText(_img, text, (xmin, ymin), cv2.FONT_HERSHEY_SIMPLEX,
   1, (0, 0, 155), 3, cv2.LINE_AA)
     c_x = (xmin + xmax)/(2*width)
     c_y = (ymin + ymax)/(2*height)
-    
+
     w = (xmax - xmin)/(width)
     h = (ymax - ymin)/(height)
     return c_x, c_y, w, h, _img
 
-    
+
 def project_to_cv_image(img_msg, dp2, dp0, d0_fix, display = "cv", img_to_draw = None):
     bridge = CvBridge()
     cv_image = bridge.imgmsg_to_cv2(img_msg, "mono8")
@@ -130,12 +130,12 @@ def project_to_cv_image(img_msg, dp2, dp0, d0_fix, display = "cv", img_to_draw =
     R0 = quaternion_matrix(d0_quat)[0:3, 0:3]
     rvec = np.transpose(np.dot(r, R_cam_on_drone))
     tvec = - np.dot(rvec, d2_pos)
-    
+
     rpy2 = euler_from_quaternion(d2_quat)
     rpy0 = euler_from_quaternion(d0_quat)
     dis = np.linalg.norm(d2_pos - d0_pos - d0_fix)
 #     print("Distance ", )
-    
+
     corpoints = np.array([
          d0_pos + np.dot(R0, np.array([0.145, 0.145, -0.02]) + d0_fix), #Center
          d0_pos + np.dot(R0, np.array([0.145, 0.145, -0.02]) + d0_fix),
@@ -144,7 +144,7 @@ def project_to_cv_image(img_msg, dp2, dp0, d0_fix, display = "cv", img_to_draw =
          d0_pos + np.dot(R0, np.array([-0.145, -0.145, -0.02]) + d0_fix),
          d0_pos + np.dot(R0, np.array([0, 0, 0.13]) + d0_fix),
      ])
-    
+
 
 
     points, _ = cv2.projectPoints(corpoints, rvec, tvec, K_cam_gray, D_cam)
@@ -154,7 +154,7 @@ def project_to_cv_image(img_msg, dp2, dp0, d0_fix, display = "cv", img_to_draw =
     xmax = int(np.max(points[:,:,0]))
     ymin = int(np.min(points[:,:,1]))
     ymax = int(np.max(points[:,:,1]))
-    
+
 #     print(xmin, xmax)
 #     _img = cv2.resize(_img, (1280, 960), interpolation=cv2.INTER_CUBIC)
     if ymax > img_msg.height or ymin < 0 or xmax > img_msg.width or xmin < 0:
@@ -179,20 +179,20 @@ def project_to_cv_image(img_msg, dp2, dp0, d0_fix, display = "cv", img_to_draw =
         if img_to_draw is None:
             img_to_draw = _img.copy()
         draw_image(img_to_draw, points, xmin, xmax, ymin, ymax)
-        
+
     xmin = np.min(points[:,:,0])
     xmax = np.max(points[:,:,0])
     ymin = np.min(points[:,:,1])
     ymax = np.max(points[:,:,1])
     c_x = (xmin + xmax)/(2*img_msg.width)
     c_y = (ymin + ymax)/(2*img_msg.height)
-    
+
     w = (xmax - xmin)/(img_msg.width)
     h = (ymax - ymin)/(img_msg.height)
     dyaw = rpy0[2] - rpy2[2]
     return c_x, c_y, w, h, dyaw, dis, _img, img_to_draw
 
-    
+
 def crop_depth(depth, c_x, c_y, w, h):
     x0 = int((c_x - w/2)*640)
     x1 = int((c_x + w/2)*640)
@@ -276,6 +276,6 @@ def estimate_distance(depth, c_x, c_y, intrinsic, avr_range = 5):
                 dissum += distance_from_cxy_d(j/width, i/height, depth[i][j], intrinsic)
 
     if dis_count == 0:
-        print("Dis is 0", c_x, c_y)
+        #print("Dis is 0", c_x, c_y)
         return 0
     return dissum / dis_count
