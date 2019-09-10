@@ -63,7 +63,7 @@ class BBox():
 
         SI = max(0, min(XA2, XB2) - max(XA1, XB1)) * max(0, min(YA2, YB2) - max(YA1, YB1))
         SU = SA + SB - SI
-        return SI / max(SA, SB)
+        return SI / min(SA, SB)
 
     def toCVBOX(self):
         XA1 = self.cx - self.w/2
@@ -118,7 +118,7 @@ class SwarmDetector:
 
         self.use_tensorrt = False
         self.first_init = True
-        self.tracker_only_on_matched = True
+        self.tracker_only_on_matched = False
         self.load_model(weights_path, weights_trt_path, model_def)
         self.TRACKER_PUB_DET = False
         self.CLEAR_TRACKER_NOT_DETECTED = True
@@ -409,10 +409,9 @@ class SwarmDetector:
     0.5, (0, 255, 255), 1, cv2.LINE_AA)
             else:
                 cv2.rectangle(img_gray, pt1, pt2, (0, 255, 0), 2)
-                cv2.putText(img_gray, "RIGHT BBOX", (10, 40), cv2.FONT_HERSHEY_SIMPLEX,1, (0, 255, 255), 1, cv2.LINE_AA)
+                # cv2.putText(img_gray, "RIGHT BBOX", (10, 40), cv2.FONT_HERSHEY_SIMPLEX,1, (0, 255, 255), 1, cv2.LINE_AA)
 
     def show_debug_img(self, img_):
-        
         if self.debug_show != "":
             self.project_estimate_node_img(img_)
 
@@ -422,10 +421,10 @@ class SwarmDetector:
             plt.imshow(img_)
             plt.show()
 
+
         elif self.debug_show == "cv":
-            #_img = cv2.resize(img_gray, (1280, 960))
+            img_ = cv2.resize(img_, (1280, 960))
             cv2.imshow("YOLO", img_)
-            #cv2.imwrite("/home/xuhao/swarm_ws/logs/res{}.jpg".format(self.count), img_)
             cv2.waitKey(2)
 
     def reproject_check_bbx(self, bbx, depth, img_ = None):
@@ -457,7 +456,7 @@ class SwarmDetector:
         img_to_draw = None
 
         if self.debug_show != "":
-            #img_to_draw = img_gray.copy()
+            # img_to_draw = img_gray.copy()
             img_to_draw = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
 
         depth = CvBridge().imgmsg_to_cv2(depth_img, "32FC1") / 1000.0
@@ -472,7 +471,7 @@ class SwarmDetector:
 
         if self.count % 6 != 1:
             rospy.loginfo_throttle(1.0, "Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
-            return img_to_draw
+            # return img_to_draw
         
         if self.CLEAR_TRACKER_NOT_DETECTED:
             self.clear_old_trackers()
@@ -490,7 +489,8 @@ class SwarmDetector:
 
             if not bbox_wrong:
                 tarpos, dpos = self.predict_3dpose(bbox.cx, bbox.cy, d)
-                #return dpos
+                print("Detect", d, dpos)
+                return dpos
                 _id = self.bbox_tracking(stamp, bbox, tarpos, img_gray)
                 print("Detect", _id, d, dpos)
                 #print("Not Wrong bbx")
@@ -509,7 +509,7 @@ class SwarmDetector:
 
         self.publish_alldetected(detected_objects, stamp)
         rospy.loginfo_throttle(1.0,"Total use time {:f}ms".format((rospy.get_time() - ts)*1000))
-
+        return None
         return img_to_draw
 
 class SwarmDetectorNode:
